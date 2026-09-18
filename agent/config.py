@@ -452,6 +452,11 @@ ENV.var(
     "Token authenticating to the OpenAI OAuth broker.",
     secret=True,
 )
+ENV.var(
+    "OPEN_SWE_CODEX_AUTH_FILE",
+    "Codex CLI auth file (usually ~/.codex/auth.json) whose ChatGPT login runs OpenAI models "
+    "when OPENAI_API_KEY is unset; Codex CLI keeps it refreshed.",
+)
 ENV.var("BG_JOB_ISOLATED_LOOPS", "LangGraph background-job event-loop isolation flag.")
 ENV.var("DEBUG_TRACEMALLOC", "Start tracemalloc to attribute unclosed-session warnings.")
 ENV.var("DEBUG_TRACEMALLOC_FRAMES", "Frames tracemalloc records per allocation.", default="25")
