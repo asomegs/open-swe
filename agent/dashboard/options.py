@@ -1,8 +1,11 @@
 """Supported models and reasoning efforts surfaced in the profile editor."""
 
+import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import cache, lru_cache
 from importlib import import_module
+from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
 from agent.config import ENV
@@ -18,7 +21,7 @@ class ModelOption(TypedDict):
     context_window: NotRequired[int | None]
 
 
-SUPPORTED_MODELS: list[ModelOption] = [
+BUILTIN_MODELS: list[ModelOption] = [
     {
         "id": "anthropic:claude-opus-5",
         "label": "Opus 5",
@@ -116,6 +119,237 @@ SUPPORTED_MODELS: list[ModelOption] = [
     },
 ]
 
+BUILTIN_MODEL_IDS: frozenset[str] = frozenset(m["id"] for m in BUILTIN_MODELS)
+
+# Models added, overridden or hidden through OPEN_SWE_EXTRA_MODELS_FILE (see load_extra_models).
+EXTRA_MODEL_EFFORTS: list[str] = ["none", "low", "medium", "high"]
+EXTRA_MODEL_DEFAULT_EFFORT: str = "medium"
+# Every effort a built-in model offers is one the provider kwargs know how to send;
+# per provider, so an effort another provider's models understand isn't accepted
+# for one that would silently drop it (``minimal`` on ``openai:``).
+_EFFORTS_BY_PROVIDER: dict[str, frozenset[str]] = {
+    provider: frozenset(
+        effort
+        for model in BUILTIN_MODELS
+        if model["id"].partition(":")[0] == provider
+        for effort in model["efforts"]
+    )
+    for provider in {model["id"].partition(":")[0] for model in BUILTIN_MODELS}
+}
+KNOWN_EFFORTS: frozenset[str] = frozenset().union(*_EFFORTS_BY_PROVIDER.values())
+_EXTRA_MODEL_FIELDS: frozenset[str] = frozenset(
+    {
+        "id",
+        "label",
+        "efforts",
+        "default_effort",
+        "supports_images",
+        "can_be_default",
+        "context_window",
+        "hidden",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ExtraModels:
+    """What an extra-models file declares: new or overriding entries, and hidden built-ins."""
+
+    models: list[ModelOption]
+    hidden: frozenset[str]
+
+
+def _extra_model_label(model_id: str) -> str:
+    return model_id.partition(":")[2].rsplit("/", 1)[-1]
+
+
+def _extra_model_id(entry: Mapping[str, object], where: str) -> str:
+    model_id = entry.get("id")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError(f'{where} needs an "id" in provider:model form')
+    model_id = model_id.strip()
+    provider, _, name = model_id.partition(":")
+    if not provider or not name:
+        raise ValueError(f"{where}: id {model_id!r} is not in provider:model form")
+    return model_id
+
+
+def _extra_model_efforts(
+    entry: Mapping[str, object], where: str, base: ModelOption | None
+) -> tuple[list[str], str]:
+    efforts_value = entry.get("efforts", base["efforts"] if base else EXTRA_MODEL_EFFORTS)
+    if (
+        not isinstance(efforts_value, list)
+        or not efforts_value
+        or not all(isinstance(effort, str) for effort in efforts_value)
+    ):
+        raise ValueError(f'{where}: "efforts" must be a list of at least one effort name')
+    efforts = [str(effort) for effort in efforts_value]
+    provider = str(entry["id"]).partition(":")[0]
+    allowed = _EFFORTS_BY_PROVIDER.get(provider, KNOWN_EFFORTS)
+    for effort in efforts:
+        if effort not in allowed:
+            raise ValueError(
+                f'{where}: unknown effort "{effort}" for {provider}: models; '
+                f"use one of {sorted(allowed)}"
+            )
+    default_effort = entry.get("default_effort")
+    if default_effort is None:
+        if base is not None and base["default_effort"] in efforts:
+            default_effort = base["default_effort"]
+        elif EXTRA_MODEL_DEFAULT_EFFORT in efforts:
+            default_effort = EXTRA_MODEL_DEFAULT_EFFORT
+        else:
+            default_effort = efforts[0]
+    if not isinstance(default_effort, str) or default_effort not in efforts:
+        raise ValueError(f'{where}: "default_effort" must be one of its "efforts" {efforts}')
+    return efforts, default_effort
+
+
+def _hidden_model_id(fields: Mapping[str, object], where: str) -> str:
+    model_id = _extra_model_id(fields, where)
+    if model_id not in BUILTIN_MODEL_IDS:
+        raise ValueError(f'{where}: "hidden" only hides a built-in model, and {model_id!r} is none')
+    if set(fields) - {"id", "hidden"}:
+        raise ValueError(f'{where}: a "hidden" entry takes no other field than "id"')
+    return model_id
+
+
+def _parse_extra_model(fields: Mapping[str, object], where: str) -> ModelOption:
+    model_id = _extra_model_id(fields, where)
+    base = next((m for m in BUILTIN_MODELS if m["id"] == model_id), None)
+    efforts, default_effort = _extra_model_efforts(fields, where, base)
+    label = fields.get("label", base["label"] if base else _extra_model_label(model_id))
+    if not isinstance(label, str) or not label.strip():
+        raise ValueError(f'{where}: "label" must be a non-empty string')
+    supports_images = fields.get("supports_images", base["supports_images"] if base else False)
+    if not isinstance(supports_images, bool):
+        raise ValueError(f'{where}: "supports_images" must be true or false')
+    option: ModelOption = {
+        "id": model_id,
+        "label": label.strip(),
+        "efforts": efforts,
+        "default_effort": default_effort,
+        "supports_images": supports_images,
+    }
+    can_be_default = fields.get("can_be_default", base.get("can_be_default") if base else None)
+    if can_be_default is not None:
+        if not isinstance(can_be_default, bool):
+            raise ValueError(f'{where}: "can_be_default" must be true or false')
+        option["can_be_default"] = can_be_default
+    context_window = fields.get("context_window")
+    if context_window is not None:
+        if (
+            isinstance(context_window, bool)
+            or not isinstance(context_window, int)
+            or context_window <= 0
+        ):
+            raise ValueError(f'{where}: "context_window" must be a positive integer of tokens')
+        option["context_window"] = context_window
+    return option
+
+
+def load_extra_models(path: Path) -> ExtraModels:
+    """Parse the JSON list of extra selectable models at ``path``.
+
+    Each entry needs an ``id`` in ``provider:model`` form; ``label``, ``efforts``,
+    ``default_effort``, ``supports_images``, ``can_be_default`` and
+    ``context_window`` are optional. An entry naming a built-in model overrides
+    it field by field, and ``{"id": ..., "hidden": true}`` drops a built-in model
+    from the catalog. This is how models served by an OpenAI-compatible gateway
+    such as LiteLLM (``openai:<name>`` with ``OPENAI_BASE_URL`` pointing at the
+    gateway) become selectable. Every problem raises ``ValueError`` naming the
+    file and entry, so a typo fails startup loudly instead of silently dropping a
+    model.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ValueError(f"Extra models file {path} does not exist") from exc
+    try:
+        raw: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Extra models file {path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, list):
+        raise ValueError(f"Extra models file {path} must contain a JSON list of models")
+    models: list[ModelOption] = []
+    hidden: set[str] = set()
+    seen: set[str] = set()
+    for index, entry in enumerate(cast(list[object], raw)):
+        where = f"{path} entry {index}"
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{where} must be an object")
+        fields = cast(Mapping[str, object], entry)
+        for field in fields:
+            if field not in _EXTRA_MODEL_FIELDS:
+                raise ValueError(
+                    f'{where}: unknown field "{field}"; allowed fields are '
+                    f"{sorted(_EXTRA_MODEL_FIELDS)}"
+                )
+        hide = fields.get("hidden", False)
+        if not isinstance(hide, bool):
+            raise ValueError(f'{where}: "hidden" must be true or false')
+        if hide:
+            model_id = _hidden_model_id(fields, where)
+            hidden.add(model_id)
+        else:
+            option = _parse_extra_model(fields, where)
+            model_id = option["id"]
+            models.append(option)
+        if model_id in seen:
+            raise ValueError(f"{where}: {model_id!r} is listed twice")
+        seen.add(model_id)
+    return ExtraModels(models=models, hidden=frozenset(hidden))
+
+
+def _extra_models_from_env() -> ExtraModels:
+    configured = ENV.OPEN_SWE_EXTRA_MODELS_FILE.optional()
+    if configured is None:
+        return ExtraModels(models=[], hidden=frozenset())
+    return load_extra_models(Path(configured).expanduser())
+
+
+def _declared_context_windows(models: Sequence[ModelOption]) -> dict[str, int]:
+    windows: dict[str, int] = {}
+    for model in models:
+        context_window = model.get("context_window")
+        if context_window is not None:
+            windows[model["id"]] = context_window
+    return windows
+
+
+def _catalog_entry(model: ModelOption) -> ModelOption:
+    """The entry as the catalog carries it: the context window lives in the
+    override map below (like the Codex ones) and reaches the pickers through
+    ``models_with_profile_context_windows``."""
+    option: ModelOption = {
+        "id": model["id"],
+        "label": model["label"],
+        "efforts": model["efforts"],
+        "default_effort": model["default_effort"],
+        "supports_images": model["supports_images"],
+    }
+    if "can_be_default" in model:
+        option["can_be_default"] = model["can_be_default"]
+    return option
+
+
+_EXTRA: ExtraModels = _extra_models_from_env()
+_BUILTIN_OVERRIDES: dict[str, ModelOption] = {
+    m["id"]: m for m in _EXTRA.models if m["id"] in BUILTIN_MODEL_IDS
+}
+EXTRA_MODELS: list[ModelOption] = [
+    _catalog_entry(m) for m in _EXTRA.models if m["id"] not in BUILTIN_MODEL_IDS
+]
+EXTRA_MODEL_IDS: frozenset[str] = frozenset(m["id"] for m in EXTRA_MODELS)
+SUPPORTED_MODELS: list[ModelOption] = [
+    *(
+        _catalog_entry(_BUILTIN_OVERRIDES.get(m["id"], m))
+        for m in BUILTIN_MODELS
+        if m["id"] not in _EXTRA.hidden
+    ),
+    *EXTRA_MODELS,
+]
 SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(m["id"] for m in SUPPORTED_MODELS)
 
 FABLE_MODEL_IDS: frozenset[str] = frozenset(
@@ -162,6 +396,12 @@ _PROFILE_CONTEXT_WINDOW_FALLBACKS: dict[str, int] = {
     "fireworks:accounts/fireworks/models/glm-5p3": 1_048_576,
     "fireworks:accounts/fireworks/models/glm-5p3-flash": 1_048_576,
 }
+# Extra models are unknown to the partner packages' models.dev profiles, so their
+# file-declared context window is the only source and overrides like the Codex ones.
+_CONTEXT_WINDOW_OVERRIDES: dict[str, int] = {
+    **CODEX_CONTEXT_WINDOW_OVERRIDES,
+    **_declared_context_windows(_EXTRA.models),
+}
 
 
 @cache
@@ -180,7 +420,7 @@ def _profile_loader(provider: str) -> ProfileLoader | None:
 
 
 def model_profile_with_context_override(model_id: str) -> dict[str, object] | None:
-    context_window = CODEX_CONTEXT_WINDOW_OVERRIDES.get(model_id)
+    context_window = _CONTEXT_WINDOW_OVERRIDES.get(model_id)
     if context_window is None:
         return None
     provider, _, model_name = model_id.partition(":")
@@ -192,7 +432,7 @@ def model_profile_with_context_override(model_id: str) -> dict[str, object] | No
 
 @lru_cache(maxsize=512)
 def model_profile_context_window(model_id: str) -> int | None:
-    context_window = CODEX_CONTEXT_WINDOW_OVERRIDES.get(model_id)
+    context_window = _CONTEXT_WINDOW_OVERRIDES.get(model_id)
     if context_window is not None:
         return context_window
     provider, _, model_name = model_id.partition(":")
@@ -248,11 +488,26 @@ def gate_fable_model(
     return model_id, effort
 
 
-DEFAULT_MODEL_ID: str = (
-    "anthropic:claude-opus-5"
-    if ENV.ANTHROPIC_API_KEY.optional() and not ENV.OPENAI_API_KEY.optional()
-    else "openai:gpt-5.6-sol"
-)
+def _default_model_id() -> str:
+    """The catalog default: Opus on an Anthropic-only deployment, else GPT-5.6 Sol.
+
+    When the extra-models file hides that model, the next selectable model of
+    the same provider takes its place, then any selectable model.
+    """
+    preferred = (
+        "anthropic:claude-opus-5"
+        if ENV.ANTHROPIC_API_KEY.optional() and not ENV.OPENAI_API_KEY.optional()
+        else "openai:gpt-5.6-sol"
+    )
+    if preferred in SUPPORTED_MODEL_IDS:
+        return preferred
+    provider = preferred.partition(":")[0]
+    selectable = [m["id"] for m in SUPPORTED_MODELS if m.get("can_be_default", True)]
+    same_provider = [model_id for model_id in selectable if model_id.startswith(f"{provider}:")]
+    return (same_provider or selectable or [preferred])[0]
+
+
+DEFAULT_MODEL_ID: str = _default_model_id()
 DEFAULT_MODEL_EFFORT: str = "medium"
 
 

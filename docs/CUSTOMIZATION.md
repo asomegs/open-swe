@@ -150,6 +150,50 @@ These defaults apply below explicit run, thread, profile, and team selections, i
 
 `max_tokens` is a maximum completion/output token budget, not the model's total context window. For OpenAI reasoning models, this budget can include both internal reasoning tokens and final response tokens.
 
+### Adding models from an OpenAI-compatible gateway
+
+The selectable models are the built-in catalog in `agent/dashboard/options.py` plus the entries of the JSON file named by `OPEN_SWE_EXTRA_MODELS_FILE`. That is how models served by [LiteLLM](https://docs.litellm.ai/) or any other OpenAI-compatible gateway reach the pickers, the workspace and instance defaults, and `LLM_MODEL_ID` / `LLM_FALLBACK_MODEL_ID`:
+
+```bash
+OPENAI_BASE_URL="http://litellm.internal:4000/v1"   # the gateway
+OPENAI_API_KEY="sk-..."                              # a key the gateway accepts
+OPEN_SWE_EXTRA_MODELS_FILE="extra-models.json"       # relative to the working directory; ~ expands
+LLM_MODEL_ID="openai:claude-sonnet-4-5"
+LLM_FALLBACK_MODEL_ID="openai:qwen3-coder"
+```
+
+The file is a JSON list where only `id` is required ([examples/extra-models.json](../examples/extra-models.json)):
+
+```json
+[
+  {
+    "id": "openai:claude-sonnet-4-5",
+    "label": "Claude Sonnet 4.5 (LiteLLM)",
+    "efforts": ["none", "low", "medium", "high"],
+    "default_effort": "medium",
+    "supports_images": true,
+    "context_window": 200000
+  },
+  { "id": "openai:qwen3-coder", "context_window": 262144 },
+  { "id": "anthropic:claude-haiku-4-5", "hidden": true }
+]
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `id` | required | `provider:model`. A gateway model is `openai:<model_name>` with the name the gateway routes (LiteLLM's `model_name`). The id of a built-in model overrides that model instead: the fields given replace the built-in's, the rest keep their built-in values. |
+| `label` | the model name | Shown in the pickers. |
+| `efforts` | `["none", "low", "medium", "high"]` | Reasoning efforts offered. A provider accepts the efforts its built-in models offer (`openai:` `none`, `low`, `medium`, `high`, `xhigh`, `max`; `google_genai:` `minimal`, `low`, `medium`, `high`), and a provider without built-in models any of them. An `openai:` model sends the effort as OpenAI `reasoning` (or `reasoning_effort` on Chat Completions); LiteLLM maps it to the backend's thinking setting and, with `drop_params: true`, drops it for models without one. |
+| `default_effort` | `medium` when offered, else the first | Preselected effort. |
+| `supports_images` | `false` | Whether image input is offered. |
+| `can_be_default` | `true` | `false` keeps the model out of instance and workspace defaults. |
+| `context_window` | unset | Input tokens the model accepts. Gateway models are unknown to the bundled model profiles, so this is what the pickers show and what the conversation summarizer budgets against. |
+| `hidden` | `false` | `true` removes a built-in model from the catalog; the entry takes no other field. Use it to keep models you have no key for out of the pickers. |
+
+A malformed file stops startup with the file and entry named; restart the backend after editing it. Hiding a model that a default names, the deployment default included, moves that default to the next selectable model of the same provider, unless `LLM_MODEL_ID` or **Admin → Global defaults** picks one. Extra models get no built-in cross-provider fallback (the built-in catalog swaps Anthropic and OpenAI, and not onto a hidden model), so name one with `LLM_FALLBACK_MODEL_ID` if you want a fallback.
+
+`openai:` models are called over the Responses API, which LiteLLM serves as `/v1/responses` and bridges to Chat Completions for non-OpenAI backends. When the gateway cannot serve it for a model, set `OPENAI_USE_RESPONSES_API=false`: direct `openai:` calls then use Chat Completions with `reasoning_effort` instead of `reasoning`, the same trade-off as `LANGSMITH_GATEWAY_OPENAI_USE_RESPONSES` below.
+
 ### Switching models
 
 Use the `provider:model` format:

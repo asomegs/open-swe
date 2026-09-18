@@ -23,6 +23,8 @@ from agent.dashboard.workspace_settings import (
     WorkspaceSettingsUpdate,
     normalize_workspace_settings_for_response,
 )
+from agent.utils import model as model_utils
+from agent.utils.model import fallback_model_id_for
 
 STALE_ANTHROPIC = "anthropic:claude-opus-4-7"
 SUPPORTED_ANTHROPIC = "anthropic:claude-opus-5"
@@ -264,3 +266,18 @@ def test_fable_disabled_fallback_is_non_fable_anthropic() -> None:
     assert model == SUPPORTED_ANTHROPIC
     assert model not in FABLE_MODEL_IDS
     assert effort == "high"
+
+
+def test_extra_models_get_no_implicit_cross_provider_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(model_utils, "EXTRA_MODEL_IDS", frozenset({"openai:my-litellm-model"}))
+    # A gateway-served extra model must not silently route its fallback off-gateway...
+    assert fallback_model_id_for("openai:my-litellm-model") is None
+    # ...while a thread that stored a since-retired built-in id keeps its provider fallback.
+    assert fallback_model_id_for(STALE_ANTHROPIC) is not None
+
+
+def test_no_fallback_onto_a_hidden_model(monkeypatch) -> None:
+    monkeypatch.setattr(
+        model_utils, "SUPPORTED_MODEL_IDS", SUPPORTED_MODEL_IDS - {SUPPORTED_ANTHROPIC}
+    )
+    assert fallback_model_id_for(SUPPORTED_OPENAI) is None

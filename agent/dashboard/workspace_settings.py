@@ -666,7 +666,11 @@ class WorkspaceSettings(Mapping[str, Any]):
         ):
             pair = _resolve_default_pair(model, effort)
         else:
-            pair = DEFAULT_THREAD_TITLE_MODEL, DEFAULT_THREAD_TITLE_REASONING_EFFORT
+            # Resolved like a stored pair so a hidden built-in default still lands
+            # on a selectable model of the same provider.
+            pair = _resolve_default_pair(
+                DEFAULT_THREAD_TITLE_MODEL, DEFAULT_THREAD_TITLE_REASONING_EFFORT
+            )
         return _gate_openai_title_model(pair, gateway_enabled=self.effective_gateway_enabled)
 
     @property

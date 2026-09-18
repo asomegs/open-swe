@@ -24,6 +24,7 @@ _GATEWAY_ENV_VARS = (
     "LANGSMITH_GATEWAY_OPENAI_USE_RESPONSES",
     "OPENAI_API_BASE",
     "OPENAI_BASE_URL",
+    "OPENAI_USE_RESPONSES_API",
 )
 
 
@@ -48,9 +49,15 @@ async def _http_server(
 
 @pytest.fixture(autouse=True)
 def _clean_gateway_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Start each test from a known env: no key, gateway off, default base URL."""
+    """Start each test from a known env: no key, gateway off, default base URL.
+
+    The model cache is keyed on the resolved kwargs, so two tests that resolve to
+    the same model would otherwise share one construction and the second one's
+    ``init_chat_model`` capture would stay empty.
+    """
     for name in _GATEWAY_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    model._MODEL_CACHE.clear()
 
 
 # --- gateway_overrides --------------------------------------------------------
@@ -367,6 +374,49 @@ def test_make_model_openai_base_url_precedes_legacy_api_base(
     with patch.object(model, "init_chat_model", fake):
         model.make_model("openai:gpt-5.6-sol", use_gateway=False)
     assert captured["base_url"] == "https://primary-proxy.example/v1"
+
+
+def test_make_model_openai_chat_completions_toggle_for_compatible_gateways(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A LiteLLM-style gateway that only serves chat completions gets plain kwargs."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://litellm.internal:4000/v1")
+    monkeypatch.setenv("OPENAI_USE_RESPONSES_API", "false")
+    captured, fake = _capture_init_chat_model()
+    with patch.object(model, "init_chat_model", fake):
+        model.make_model(
+            "openai:my-litellm-model",
+            use_gateway=False,
+            reasoning={"effort": "low", "summary": "auto"},
+        )
+    assert captured["base_url"] == "http://litellm.internal:4000/v1"
+    assert captured["use_responses_api"] is False
+    assert captured["reasoning_effort"] == "low"
+    for responses_only in ("reasoning", "store", "include", "output_version"):
+        assert responses_only not in captured
+
+
+def test_make_model_openai_chat_completions_toggle_without_base_url_uses_sdk_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_USE_RESPONSES_API", "false")
+    captured, fake = _capture_init_chat_model()
+    with patch.object(model, "init_chat_model", fake):
+        model.make_model("openai:gpt-5.6-sol", use_gateway=False)
+    assert "base_url" not in captured
+    assert captured["use_responses_api"] is False
+
+
+def test_make_model_gateway_ignores_direct_chat_completions_toggle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-key")
+    monkeypatch.setenv("OPENAI_USE_RESPONSES_API", "false")
+    captured, fake = _capture_init_chat_model()
+    with patch.object(model, "init_chat_model", fake):
+        model.make_model("openai:gpt-5.6-sol", use_gateway=True)
+    assert captured["base_url"] == "https://gateway.smith.langchain.com/openai/v1"
+    assert captured["use_responses_api"] is True
 
 
 def test_make_model_gateway_openai_replaces_websocket(
