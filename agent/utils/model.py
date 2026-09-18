@@ -6,10 +6,7 @@ from langchain.chat_models import init_chat_model
 from agent.config import ENV
 from agent.dashboard.options import DEFAULT_MODEL_ID, model_profile_with_context_override
 from agent.utils.gateway import gateway_env_default, gateway_overrides
-from agent.utils.openai_oauth import (
-    build_desktop_openai_oauth_model,
-    desktop_openai_oauth_available,
-)
+from agent.utils.openai_oauth import build_openai_oauth_model, openai_oauth_available
 
 OPENAI_RESPONSES_WS_BASE_URL = "wss://api.openai.com/v1"
 BASETEN_BASE_URL = "https://inference.baseten.co/v1"
@@ -137,7 +134,9 @@ def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpa
     ``use_gateway`` resolves the deployment default (``LANGSMITH_GATEWAY_ENABLED``)
     when ``None``; async callers pass the workspace-settings-resolved value. When on,
     gateway ``base_url``/``api_key``/``use_responses_api`` override the direct
-    provider defaults below (see :mod:`agent.utils.gateway`).
+    provider defaults below (see :mod:`agent.utils.gateway`). Without a gateway or
+    ``OPENAI_API_KEY``, OpenAI models run on a ChatGPT login when one is configured
+    (see :mod:`agent.utils.openai_oauth`).
     """
     model_kwargs: dict[str, object] = dict(kwargs)
     model_kwargs.setdefault("max_retries", DEFAULT_MAX_RETRIES)
@@ -165,7 +164,7 @@ def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpa
         model_id.startswith("openai:")
         and not gateway_applied
         and not ENV.OPENAI_API_KEY.optional()
-        and desktop_openai_oauth_available()
+        and openai_oauth_available()
     ):
         model_kwargs.pop("base_url", None)
         oauth_applied = True
@@ -204,7 +203,7 @@ def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpa
     if cached is not None:
         return cached
     if oauth_applied:
-        model = build_desktop_openai_oauth_model(
+        model = build_openai_oauth_model(
             model_id.split(":", 1)[1], **cast(dict[str, Any], model_kwargs)
         )
     else:
@@ -368,7 +367,7 @@ def validate_local_dev_llm_config() -> None:
     if (
         model_id.startswith("openai:")
         and not ENV.OPENAI_API_KEY.optional()
-        and not desktop_openai_oauth_available()
+        and not openai_oauth_available()
     ):
         raise ValueError(f"OPENAI_API_KEY is required for configured model {model_id}")
     elif model_id.startswith("anthropic:") and not ENV.ANTHROPIC_API_KEY.optional():
