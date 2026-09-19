@@ -113,6 +113,8 @@ Open SWE calls models through [LangChain](https://python.langchain.com/) chat mo
 
 **ChatGPT login instead of an OpenAI key.** A host where [Codex CLI](https://developers.openai.com/codex/cli) is signed in to ChatGPT can run `openai:` models on that login: set `OPEN_SWE_CODEX_AUTH_FILE=~/.codex/auth.json` and leave `OPENAI_API_KEY` unset (an API key or an enabled gateway takes precedence). Open SWE reads the file on each request and never refreshes it, so keep using Codex CLI, or run `codex login` again, once its login expires. Only OpenAI models are covered: set `LLM_MODEL_ID` and `LLM_FALLBACK_MODEL_ID` to `openai:` models and choose OpenAI models under **Admin → Global defaults** unless other providers have keys. This is the same unofficial Codex backend integration the desktop app's ChatGPT sign-in uses; check that your ChatGPT plan and OpenAI's terms allow it.
 
+**LiteLLM or another OpenAI-compatible gateway.** Point `OPENAI_BASE_URL` at the gateway, for example `http://litellm.internal:4000/v1`, set `OPENAI_API_KEY` to a key it accepts, and name its models `openai:<model_name>`. They become selectable through `OPEN_SWE_EXTRA_MODELS_FILE`, a JSON file described in [CUSTOMIZATION.md](CUSTOMIZATION.md#adding-models-from-an-openai-compatible-gateway) that can also override or hide built-in models; set `LLM_MODEL_ID` and `LLM_FALLBACK_MODEL_ID` to those ids, since gateway models get no built-in cross-provider fallback. `openai:` models are called over the Responses API; when the gateway cannot serve `/v1/responses` for a model, set `OPENAI_USE_RESPONSES_API=false` to send Chat Completions instead.
+
 **Which model runs.** The deployment default comes from the supported-model list in `agent/dashboard/options.py` (an Anthropic model when only an Anthropic key is configured, otherwise an OpenAI one); override it with `LLM_MODEL_ID` (`provider:model`) and `LLM_REASONING_EFFORT` (`low`, `medium`, `high`, `max`), and name a `LLM_FALLBACK_MODEL_ID` for when the primary provider fails. Admins set the instance default, which each workspace can override, under **Admin → Global defaults**, and each user can pick their own model and effort under **My settings**. Model ids and their providers are described in [CUSTOMIZATION.md](CUSTOMIZATION.md).
 
 **Other API keys.** `EXA_API_KEY` (from [dashboard.exa.ai](https://dashboard.exa.ai)) enables the web search tool. `REVIEWER_OUTCOMES_DATASET` names the LangSmith dataset the reviewer records finding outcomes in (default `openswe-reviewer-outcomes`).
@@ -253,7 +255,7 @@ DASHBOARD_JWT_SECRET=""               # openssl rand -hex 32     (signs the sess
 CONFIGURED_ADMINS=""                  # GitHub logins or emails, comma-separated; admins see the Admin pages
 ```
 
-On LangGraph Platform, set them under the deployment's environment variables; saving rolls out a new revision. With Docker, put them in the file you pass as `--env-file`. `DASHBOARD_BASE_URL` and `DASHBOARD_API_BASE_URL` are not needed: they default to `LANGGRAPH_URL` because the dashboard is served from the same origin.
+On LangGraph Platform, set them under the deployment's environment variables; saving rolls out a new revision. With Docker, put them in the file you pass as `--env-file`; the repository's [`.env.example`](../.env.example) is a commented template of these and the optional variables. `DASHBOARD_BASE_URL` and `DASHBOARD_API_BASE_URL` are not needed: they default to `LANGGRAPH_URL` because the dashboard is served from the same origin.
 
 ## 7. Verify it works
 

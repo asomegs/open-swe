@@ -1,0 +1,18 @@
+[
+  {
+    "id": "openai:claude-sonnet-4-5",
+    "label": "Claude Sonnet 4.5 (LiteLLM)",
+    "efforts": ["none", "low", "medium", "high"],
+    "default_effort": "medium",
+    "supports_images": true,
+    "context_window": 200000
+  },
+  {
+    "id": "openai:qwen3-coder",
+    "context_window": 262144
+  },
+  {
+    "id": "anthropic:claude-haiku-4-5",
+    "hidden": true
+  }
+]

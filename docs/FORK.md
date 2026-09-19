@@ -38,3 +38,33 @@ upstream이 같은 기능을 제공하게 되면 항목을 지우거나 "제거�
 - **충돌 위험**: `agent/utils/model.py`의 `make_model` 분기와 `agent/config.py`가 upstream에서 자주 바뀝니다. `server.py`는 건드리지 않았습니다.
 - **upstream 가능성**: 높습니다. 데스크톱 OAuth 경로를 서버 모드로 확장한 것이라 그대로 PR 후보입니다. 구조화 출력 우회는 langchain-openai의 `_ChatOpenAICodex` 이슈로 올릴 대상이고, 거기서 고쳐지면 서브클래스를 제거합니다.
 - **테스트**: `tests/models/test_openai_oauth.py`
+
+### 2. LiteLLM 등 OpenAI 호환 게이트웨이의 모델 사용 (2026-09-19)
+
+- **목적**: `OPENAI_BASE_URL`로 가리킨 LiteLLM 같은 OpenAI 호환 게이트웨이가 서빙하는 모델을 `openai:<이름>`으로 고르고 기본값으로 쓸 수 있게 합니다. upstream은 `agent/dashboard/options.py`의 고정 목록만 허용하고, 직접 OpenAI 경로에는 Responses API를 강제했습니다.
+- **진입점**
+  - `agent/dashboard/options.py`: 기존 목록을 `BUILTIN_MODELS`로 두고 `OPEN_SWE_EXTRA_MODELS_FILE`의 JSON(`load_extra_models`)을 합쳐 `SUPPORTED_MODELS`를 만듭니다. 파일 항목은 새 모델을 추가하거나, 내장 모델의 필드를 덮어쓰거나, `hidden`으로 내장 모델을 숨깁니다. `context_window`는 프로필 오버라이드에 병합되고, 숨겨진 기본 모델은 `_default_model_id`가 같은 provider의 다음 모델로 대체합니다.
+  - `agent/utils/model.py`: `OPENAI_USE_RESPONSES_API=false`면 직접 OpenAI 경로도 Chat Completions로 호출하는 `openai_use_responses_api`. `fallback_model_id_for`는 추가 모델에는 하드코딩된 타사 폴백을 적용하지 않고, 폴백 대상이 숨겨졌으면 폴백을 끕니다.
+  - `agent/dashboard/workspace_settings.py`: 스레드 제목 모델의 하드코딩 기본값도 `_resolve_default_pair`를 거쳐 숨겨진 모델을 피합니다.
+  - `agent/config.py`: 환경변수 `OPEN_SWE_EXTRA_MODELS_FILE`, `OPENAI_USE_RESPONSES_API`
+- **설정** (`docs/INSTALLATION.md` 4절, `docs/CUSTOMIZATION.md` 2절, 예시 `examples/extra-models.json`)
+  - `OPENAI_BASE_URL`, `OPENAI_API_KEY`(게이트웨이 키), `OPEN_SWE_EXTRA_MODELS_FILE`, 그리고 `LLM_MODEL_ID`/`LLM_FALLBACK_MODEL_ID`를 `openai:` 추가 모델로 지정
+  - 게이트웨이가 `/v1/responses`를 못 받으면 `OPENAI_USE_RESPONSES_API=false`
+- **설계상 선택**
+  - 모델 파일은 기동 시 한 번 읽습니다. 잘못된 항목은 파일과 항목 번호를 담은 `ValueError`로 기동을 멈춥니다. 조용히 빠뜨리는 것보다 낫습니다.
+  - effort는 같은 provider의 내장 모델이 제공하는 값만 허용합니다. `openai:`에 `minimal`을 주면 요청에서 조용히 빠지기 때문입니다. `openai:` 모델은 effort를 OpenAI `reasoning`(Chat Completions면 `reasoning_effort`)으로 보내고, 백엔드별 매핑과 미지원 파라미터 제거(`drop_params`)는 LiteLLM에 맡깁니다.
+- **충돌 위험**: `options.py`의 모델 목록과 `model.py`의 `make_model` OpenAI 분기는 upstream이 자주 바꿉니다. 목록 이름을 `BUILTIN_MODELS`로 바꾼 부분은 upstream이 모델을 추가할 때마다 충돌하지만 해결은 기계적입니다.
+- **upstream 가능성**: 중간. 외부 파일로 모델 목록을 넓히는 것과 Responses API 토글은 범용적이라 PR 후보입니다.
+- **테스트**: `tests/dashboard/test_extra_models.py`, `tests/sandbox/test_gateway.py`(토글), `tests/models/test_model_fallback_resolution.py`(폴백)
+
+### 3. `.env.example` 템플릿 (2026-09-20)
+
+- **목적**: upstream에는 `.env` 템플릿 파일이 없고 `docs/DEVELOPMENT.md` 5절과 `docs/INSTALLATION.md` 6절의 코드 블록이 그 역할을 합니다. 복사해서 값만 채우면 되는 주석 달린 템플릿을 저장소 루트에 둡니다.
+- **진입점**
+  - `.env.example`: 필수 변수는 빈 값으로, 선택 변수는 주석 처리한 채 기본값이나 대표값을 적어 둡니다. 포크 변경 1번(Codex 로그인)과 2번(게이트웨이 모델)의 변수도 들어 있습니다.
+  - `.gitignore`: `.env.*` 패턴이 이 파일까지 무시하므로 `!.env.example` 예외를 추가했습니다.
+  - `README.md`, `docs/DEVELOPMENT.md` 5절, `docs/INSTALLATION.md` 6절: 템플릿을 가리키는 한 문장씩
+- **설정**: `cp .env.example .env` 뒤에 값을 채웁니다. 빈 값은 `agent/config.py`의 레지스트리가 미설정으로 취급하므로 안 쓰는 줄은 비워 둬도 됩니다.
+- **충돌 위험**: 낮습니다. 새 파일이라 upstream과 충돌하지 않지만, upstream이 환경변수를 추가·삭제하면 `agent/config.py`와 어긋납니다. 두 문서의 코드 블록을 갱신할 때 함께 맞춥니다.
+- **upstream 가능성**: 높습니다. 그대로 PR 후보입니다.
+- **테스트**: 없음. 문서성 파일입니다.

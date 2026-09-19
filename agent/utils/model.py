@@ -4,7 +4,12 @@ from typing import Any, Literal, TypedDict, Unpack, cast
 from langchain.chat_models import init_chat_model
 
 from agent.config import ENV
-from agent.dashboard.options import DEFAULT_MODEL_ID, model_profile_with_context_override
+from agent.dashboard.options import (
+    DEFAULT_MODEL_ID,
+    EXTRA_MODEL_IDS,
+    SUPPORTED_MODEL_IDS,
+    model_profile_with_context_override,
+)
 from agent.utils.gateway import gateway_env_default, gateway_overrides
 from agent.utils.openai_oauth import build_openai_oauth_model, openai_oauth_available
 
@@ -128,6 +133,17 @@ def _configure_openai_responses_kwargs(model_kwargs: dict[str, object]) -> None:
         include.append("reasoning.encrypted_content")
 
 
+def openai_use_responses_api() -> bool:
+    """Whether direct ``openai:`` calls use the Responses API.
+
+    Defaults to ``True``: OpenAI reasoning models with tools reject
+    ``reasoning_effort`` on Chat Completions. ``OPENAI_USE_RESPONSES_API=false`` is
+    for an OpenAI-compatible gateway such as LiteLLM behind ``OPENAI_BASE_URL`` that
+    should get Chat Completions (``reasoning`` becomes ``reasoning_effort``).
+    """
+    return ENV.OPENAI_USE_RESPONSES_API.get_bool(default=True)
+
+
 def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpack[ModelKwargs]):
     """Build a chat model, optionally routed through the LangSmith LLM Gateway.
 
@@ -144,12 +160,13 @@ def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpa
         model_kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
     if model_id.startswith("openai:"):
-        model_kwargs["base_url"] = (
-            ENV.OPENAI_BASE_URL.optional()
-            or ENV.OPENAI_BASE_URL.optional()
-            or OPENAI_RESPONSES_WS_BASE_URL
-        )
-        model_kwargs["use_responses_api"] = True
+        use_responses_api = openai_use_responses_api()
+        base_url = ENV.OPENAI_BASE_URL.optional()
+        if base_url is None and use_responses_api:
+            base_url = OPENAI_RESPONSES_WS_BASE_URL
+        if base_url is not None:
+            model_kwargs["base_url"] = base_url
+        model_kwargs["use_responses_api"] = use_responses_api
 
     enabled = gateway_env_default() if use_gateway is None else use_gateway
     gateway_applied = False
@@ -167,6 +184,8 @@ def make_model(model_id: str, *, use_gateway: bool | None = None, **kwargs: Unpa
         and openai_oauth_available()
     ):
         model_kwargs.pop("base_url", None)
+        # The Codex backend only speaks the Responses API.
+        model_kwargs["use_responses_api"] = True
         oauth_applied = True
 
     if model_id.startswith("openai:"):
@@ -218,12 +237,21 @@ def fallback_model_id_for(primary_model_id: str) -> str | None:
     Anthropic primaries fall back to OpenAI and vice versa. Returns ``None``
     when the provider has no configured cross-provider fallback (e.g. Google,
     local, or self-hosted providers we don't want to silently route off-host).
+    Models added through ``OPEN_SWE_EXTRA_MODELS_FILE`` are served by a gateway
+    of the operator's choosing, so they get no implicit fallback either, and a
+    fallback the same file hides is no fallback; ``LLM_FALLBACK_MODEL_ID`` names
+    one explicitly.
     """
+    if primary_model_id in EXTRA_MODEL_IDS:
+        return None
+    fallback: str | None = None
     if primary_model_id.startswith("anthropic:"):
-        return "openai:gpt-5.6-sol"
-    if primary_model_id.startswith("openai:"):
-        return "anthropic:claude-opus-5"
-    return None
+        fallback = "openai:gpt-5.6-sol"
+    elif primary_model_id.startswith("openai:"):
+        fallback = "anthropic:claude-opus-5"
+    if fallback is not None and fallback not in SUPPORTED_MODEL_IDS:
+        return None
+    return fallback
 
 
 def is_gemini_3_family(model_id: str) -> bool:

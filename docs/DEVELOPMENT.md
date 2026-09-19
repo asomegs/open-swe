@@ -56,7 +56,7 @@ Slack checks the events Request URL against a running backend. If you create the
 
 ## 5. Write `.env`
 
-Create `.env` in the repository root; `langgraph dev` loads it.
+Create `.env` in the repository root; `langgraph dev` loads it. [`.env.example`](../.env.example) is a commented template of the block below plus the optional variables, so `cp .env.example .env` is the usual start.
 
 ```bash
 LANGSMITH_API_KEY=""            # LangSmith → Settings → API Keys; also used for sandboxes and trace links
@@ -65,6 +65,8 @@ LANGSMITH_PROJECT=""            # optional project for traces and "View trace" l
 
 ANTHROPIC_API_KEY=""            # any provider key; not needed if you use an LLM gateway (e.g. LangSmith Gateway; see the installation guide)
 # OPEN_SWE_CODEX_AUTH_FILE="~/.codex/auth.json"   # or run openai: models on this machine's Codex CLI ChatGPT login (leave OPENAI_API_KEY unset)
+# OPENAI_BASE_URL="http://localhost:4000/v1"      # or a LiteLLM / OpenAI-compatible gateway, with OPENAI_API_KEY set to its key
+# OPEN_SWE_EXTRA_MODELS_FILE="extra-models.json"  # makes the gateway's models selectable (see the customization guide)
 
 GITHUB_APP_ID=""                # step 2
 GITHUB_APP_CLIENT_ID=""

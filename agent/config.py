@@ -347,6 +347,12 @@ ENV.var("ANALYTICS_RECEIPT_DAYS", "Ingestion-receipt retention.", default="90")
 ENV.var("ANTHROPIC_API_KEY", "Anthropic API key.", secret=True)
 ENV.var("OPENAI_API_KEY", "OpenAI API key.", secret=True)
 ENV.var("OPENAI_BASE_URL", "OpenAI-compatible API base URL.", aliases=("OPENAI_API_BASE",))
+ENV.var(
+    "OPENAI_USE_RESPONSES_API",
+    "Call openai: models over the Responses API (default true). Set false for an "
+    "OpenAI-compatible gateway such as LiteLLM that should get Chat Completions instead.",
+    default="true",
+)
 ENV.var("GOOGLE_API_KEY", "Google AI API key.", secret=True)
 ENV.var("GROQ_API_KEY", "Groq API key.", secret=True)
 ENV.var("FIREWORKS_API_KEY", "Fireworks API key.", secret=True)
@@ -357,6 +363,11 @@ ENV.var(
     "Reasoning effort for the default model (low, medium, high, max) when no workspace or profile setting applies.",
 )
 ENV.var("LLM_FALLBACK_MODEL_ID", "Fallback model in provider:model form.")
+ENV.var(
+    "OPEN_SWE_EXTRA_MODELS_FILE",
+    "JSON file of extra selectable models, e.g. ones served by a LiteLLM or other "
+    "OpenAI-compatible gateway as openai:<name>; format in docs/CUSTOMIZATION.md.",
+)
 ENV.var("EXA_API_KEY", "Exa API key enabling web search.", secret=True)
 ENV.var(
     "API_STANDARDS_SKILL_HANDLE", "Hub handle of the API standards skill.", default="api-standards"
