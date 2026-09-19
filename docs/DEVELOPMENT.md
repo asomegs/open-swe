@@ -56,7 +56,7 @@ Slack checks the events Request URL against a running backend. If you create the
 
 ## 5. Write `.env`
 
-Create `.env` in the repository root; `langgraph dev` loads it.
+Create `.env` in the repository root; `langgraph dev` loads it. [`.env.example`](../.env.example) is a commented template of the block below plus the optional variables, so `cp .env.example .env` is the usual start.
 
 ```bash
 LANGSMITH_API_KEY=""            # LangSmith → Settings → API Keys; also used for sandboxes and trace links

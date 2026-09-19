@@ -255,7 +255,7 @@ DASHBOARD_JWT_SECRET=""               # openssl rand -hex 32     (signs the sess
 CONFIGURED_ADMINS=""                  # GitHub logins or emails, comma-separated; admins see the Admin pages
 ```
 
-On LangGraph Platform, set them under the deployment's environment variables; saving rolls out a new revision. With Docker, put them in the file you pass as `--env-file`. `DASHBOARD_BASE_URL` and `DASHBOARD_API_BASE_URL` are not needed: they default to `LANGGRAPH_URL` because the dashboard is served from the same origin.
+On LangGraph Platform, set them under the deployment's environment variables; saving rolls out a new revision. With Docker, put them in the file you pass as `--env-file`; the repository's [`.env.example`](../.env.example) is a commented template of these and the optional variables. `DASHBOARD_BASE_URL` and `DASHBOARD_API_BASE_URL` are not needed: they default to `LANGGRAPH_URL` because the dashboard is served from the same origin.
 
 ## 7. Verify it works
 
